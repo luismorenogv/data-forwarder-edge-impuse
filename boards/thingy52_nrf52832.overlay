@@ -6,27 +6,27 @@
 
 &i2c0 {
     status = "okay";
+
     mpu9250: mpu9250@68 {
         compatible = "invensense,mpu9250";
         reg = <0x68>;
-        label = "MPU9250";
         status = "okay";
-    };
-};
 
+        /* Required by the Zephyr binding */
+        /* Gyro sample rate divider:  rate = 1000 / (1 + div)
+           For ~50 Hz with DLPF enabled -> 1000/(1+19) ≈ 50 Hz */
+        gyro-sr-div = <19>;
 
-/ {
-    aliases {
-        imu = &lsm6dsl;
-    };
-};
+        /* Gyro low-pass (Hz) – legal: 250,184,92,41,20,10,5,3600 */
+        gyro-dlpf = <41>;
 
-&i2c0 {
-    status = "okay";
-    lsm6dsl: lsm6dsl@6a {
-        compatible = "st,lsm6dsl";
-        reg = <0x6a>;
-        label = "LSM6DSL";
-        status = "okay";
+        /* Gyro full-scale (dps): 250,500,1000,2000 */
+        gyro-fs = <500>;
+
+        /* Accel full-scale (g): 2,4,8,16 */
+        accel-fs = <4>;
+
+        /* Accel low-pass (string): '218.1','218.1a','99','44.8','21.2','10.2','5.05','420' */
+        accel-dlpf = "44.8";
     };
 };
