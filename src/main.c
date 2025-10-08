@@ -49,19 +49,19 @@ static int ble_init(void) {
 
 static int imu_init(void) {
     #if DT_HAS_COMPAT_STATUS_OKAY(invensense_mpu9250)
-    const struct device *imu = DEVICE_DT_GET_ANY(invensense_mpu9250);
+        imu = DEVICE_DT_GET_ANY(invensense_mpu9250);
     #elif DT_HAS_COMPAT_STATUS_OKAY(st_lsm6dsl)
-    const struct device *imu = DEVICE_DT_GET_ANY(st_lsm6dsl);
+        imu = DEVICE_DT_GET_ANY(st_lsm6dsl);
     #else
-    #error "No supported IMU (MPU9250 or LSM6DSL) present in devicetree"
+    #error "No supported IMU present"
     #endif
-
-    if (!device_is_ready(imu)) {
-        LOG_ERR("IMU not ready (check overlay/driver)");
-        return -ENODEV;
-    }
-    return 0;
+        if (!device_is_ready(imu)) {
+            LOG_ERR("IMU not ready");
+            return -ENODEV;
+        }
+        return 0;
 }
+
 
 static int send_sample(void) {
     if (!cur_conn) return -ENOTCONN;
