@@ -4,3 +4,46 @@
 
 # build
 /build*/
+
+
+# IDE and editor files
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+.DS_Store
+
+# Zephyr and CMake build directories
+build/
+**/build/
+**/build-*/
+**/CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+
+# Ninja build files
+*.ninja
+*.ninja_deps
+*.ninja_log
+
+# Generated Zephyr configuration
+**/zephyr/.config
+**/zephyr/include/generated/**
+**/zephyr/misc/generated/**
+**/zephyr/modules/**
+**/zephyr/isr_tables.c
+**/zephyr/pm.config
+
+# Compiled objects and libraries
+*.o
+*.obj
+*.a
+*.lib
+*.pdb
+
+# Temporary files
+*.tmp
+*.log
+*.bak
