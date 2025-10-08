@@ -1,136 +1,110 @@
-/*
- * Copyright (c) 2021 Nordic Semiconductor ASA
- *
- * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
- */
-
 #include <zephyr/kernel.h>
-#include <stdio.h>
+#include <zephyr/logging/log.h>
 #include <zephyr/drivers/sensor.h>
-#include <zephyr/drivers/uart.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
+#include <bluetooth/services/nus.h>
+#include <stdio.h>
 
-#define SAMPLE_PERIOD_MS	100
+LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
-#define UART_BUF_SIZE		64
+#define SAMPLE_PERIOD_MS 20  // 50 Hz
 
-const static enum sensor_channel sensor_channels[] = {
-	SENSOR_CHAN_ACCEL_X,
-	SENSOR_CHAN_ACCEL_Y,
-	SENSOR_CHAN_ACCEL_Z
+static const struct device *imu;
+static struct bt_conn *cur_conn;
+
+static void connected(struct bt_conn *conn, uint8_t err) {
+    if (!err) {
+        cur_conn = bt_conn_ref(conn);
+        LOG_INF("BLE connected");
+    }
+}
+static void disconnected(struct bt_conn *conn, uint8_t reason) {
+    ARG_UNUSED(reason);
+    if (cur_conn) { bt_conn_unref(cur_conn); cur_conn = NULL; }
+    LOG_INF("BLE disconnected");
+}
+
+BT_CONN_CB_DEFINE(conn_callbacks) = {
+    .connected = connected,
+    .disconnected = disconnected,
 };
 
-static const struct device *sensor_dev = DEVICE_DT_GET(DT_NODELABEL(sensor_sim));
-static const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(ncs_ei_uart));
-static atomic_t uart_busy;
+static int ble_init(void) {
+    int err = bt_enable(NULL);
+    if (err) return err;
 
+    err = bt_nus_init(NULL);
+    if (err) return err;
 
-static void uart_cb(const struct device *dev, struct uart_event *evt,
-		    void *user_data)
-{
-	if (evt->type == UART_TX_DONE) {
-		(void)atomic_set(&uart_busy, false);
-	}
+    /* Fast advertising */
+    const struct bt_data ad[] = {
+        BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+        BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME,
+                sizeof(CONFIG_BT_DEVICE_NAME) - 1),
+    };
+    err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), NULL, 0);
+    return err;
 }
 
-static int init(void)
-{
-	if (!device_is_ready(sensor_dev)) {
-		printk("Sensor device not ready\n");
-		return -ENODEV;
-	}
-
-	if (!device_is_ready(uart_dev)) {
-		printk("UART device not ready\n");
-		return -ENODEV;
-	}
-
-	int err = uart_callback_set(uart_dev, uart_cb, NULL);
-
-	if (err) {
-		printk("Cannot set UART callback (err %d)\n", err);
-	}
-
-	return err;
+static int imu_init(void) {
+    imu = DEVICE_DT_GET(DT_ALIAS(imu));
+    if (!device_is_ready(imu)) {
+        LOG_ERR("IMU not ready (check overlay/driver)");
+        return -ENODEV;
+    }
+    return 0;
 }
 
-static int provide_sensor_data(void)
-{
-	struct sensor_value data[ARRAY_SIZE(sensor_channels)];
-	int err = 0;
+static int send_sample(void) {
+    if (!cur_conn) return -ENOTCONN;
 
-	/* Sample simulated sensor. */
-	for (size_t i = 0; (!err) && (i < ARRAY_SIZE(sensor_channels)); i++) {
-		err = sensor_sample_fetch_chan(sensor_dev, sensor_channels[i]);
-		if (!err) {
-			err = sensor_channel_get(sensor_dev, sensor_channels[i],
-						 &data[i]);
-		}
-	}
+    struct sensor_value ax, ay, az, gx, gy, gz;
+    int err = sensor_sample_fetch(imu);
+    if (err) return err;
 
-	if (err) {
-		printk("Sensor sampling error (err %d)\n", err);
-		return err;
-	}
+    /* Accel */
+    sensor_channel_get(imu, SENSOR_CHAN_ACCEL_X, &ax);
+    sensor_channel_get(imu, SENSOR_CHAN_ACCEL_Y, &ay);
+    sensor_channel_get(imu, SENSOR_CHAN_ACCEL_Z, &az);
+    /* Gyro */
+    sensor_channel_get(imu, SENSOR_CHAN_GYRO_X, &gx);
+    sensor_channel_get(imu, SENSOR_CHAN_GYRO_Y, &gy);
+    sensor_channel_get(imu, SENSOR_CHAN_GYRO_Z, &gz);
 
-	/* Send data over UART. */
-	static uint8_t buf[UART_BUF_SIZE];
+    char line[96];
+    int n = snprintk(line, sizeof(line),
+        "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+        sensor_value_to_double(&ax), sensor_value_to_double(&ay),
+        sensor_value_to_double(&az), sensor_value_to_double(&gx),
+        sensor_value_to_double(&gy), sensor_value_to_double(&gz));
 
-	if (!atomic_cas(&uart_busy, false, true)) {
-		printk("UART not ready\n");
-		printk("Please use lower sampling frequency\n");
-		return -EBUSY;
-	}
-
-	int res = snprintf((char *)buf, sizeof(buf), "%.2f,%.2f,%.2f\r\n",
-			   sensor_value_to_double(&data[0]),
-			   sensor_value_to_double(&data[1]),
-			   sensor_value_to_double(&data[2]));
-
-	if (res < 0) {
-		printk("snprintf returned error (err %d)\n", res);
-		return res;
-	} else if (res >= sizeof(buf)) {
-		printk("UART_BUF_SIZE is too small to store the data\n");
-		printk("%d bytes are required\n", res);
-		return -ENOMEM;
-	}
-
-	err = uart_tx(uart_dev, buf, res, SYS_FOREVER_MS);
-
-	if (err) {
-		printk("Cannot send data over UART (err %d)\n", err);
-	} else {
-		printk("Sent data: %s", buf);
-	}
-
-	return err;
+    if (n <= 0) return -EIO;
+    /* Send over BLE NUS; central_uart on the DK will forward over USB CDC */
+    err = bt_nus_send(cur_conn, line, n);
+    return err;
 }
 
-int main(void)
-{
-	if (init()) {
-		return 0;
-	}
-	printk("Initialized\n");
+int main(void) {
+    if (ble_init()) { LOG_ERR("BLE init failed"); return -1; }
+    if (imu_init()) { LOG_ERR("IMU init failed"); return -1; }
+    LOG_INF("Ready. Waiting for BLE central...");
 
-	int64_t uptime = k_uptime_get();
-	int64_t next_timeout = uptime + SAMPLE_PERIOD_MS;
-
-	while (1) {
-		if (provide_sensor_data()) {
-			break;
-		}
-
-		uptime = k_uptime_get();
-
-		if (next_timeout <= uptime) {
-			printk("Sampling frequency is too high for sensor\n");
-			break;
-		}
-
-		k_sleep(K_MSEC(next_timeout - uptime));
-		next_timeout += SAMPLE_PERIOD_MS;
-	}
-
-	return 0;
+    int64_t next = k_uptime_get() + SAMPLE_PERIOD_MS;
+    while (1) {
+        if (cur_conn) {
+            int err = send_sample();
+            if (err && err != -ENOTCONN) {
+                LOG_WRN("send_sample err %d", err);
+            }
+        }
+        int64_t now = k_uptime_get();
+        if (next <= now) {
+            /* If you hit this often, lower sample rate or reduce print length */
+            next = now + SAMPLE_PERIOD_MS;
+        } else {
+            k_sleep(K_MSEC(next - now));
+            next += SAMPLE_PERIOD_MS;
+        }
+    }
 }

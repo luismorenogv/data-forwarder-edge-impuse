@@ -1,0 +1,32 @@
+/ {
+    aliases {
+        imu = &mpu9250;
+    };
+};
+
+&i2c0 {
+    status = "okay";
+    mpu9250: mpu9250@68 {
+        compatible = "invensense,mpu9250";
+        reg = <0x68>;
+        label = "MPU9250";
+        status = "okay";
+    };
+};
+
+
+/ {
+    aliases {
+        imu = &lsm6dsl;
+    };
+};
+
+&i2c0 {
+    status = "okay";
+    lsm6dsl: lsm6dsl@6a {
+        compatible = "st,lsm6dsl";
+        reg = <0x6a>;
+        label = "LSM6DSL";
+        status = "okay";
+    };
+};
